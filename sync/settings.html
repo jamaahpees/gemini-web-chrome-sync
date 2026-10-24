@@ -1,0 +1,219 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Gemini sync settings</title>
+    <link rel="stylesheet" href="settings.css" />
+    <style>
+      #profiles-section {
+        display: none;
+      }
+      table {
+        border-collapse: collapse;
+        width: 100%;
+        margin-top: 12px;
+        font-size: 0.9em;
+      }
+      th,
+      td {
+        border: 1px solid #888;
+        padding: 6px 10px;
+        text-align: left;
+      }
+      th {
+        background: #f0f0f0;
+      }
+      @media (prefers-color-scheme: dark) {
+        th {
+          background: #333;
+        }
+      }
+      .profiles-controls {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        margin-top: 8px;
+      }
+      .profiles-controls small {
+        color: #666;
+        font-size: 0.85em;
+      }
+    </style>
+    <script type="module" src="settings.js"></script>
+  </head>
+  <body>
+    <main>
+      <h1>Gemini sync</h1>
+      <p>
+        This Chrome profile sends allowlisted Google session cookies to your
+        private Tailscale server. Treat access to that server as access to your
+        Google session. Incognito and partitioned cookies are excluded.
+      </p>
+      <p>
+        The existing Cookie-Editor works independently. Open these settings by
+        right-clicking its toolbar icon.
+      </p>
+      <p id="status" role="status" aria-live="polite">Loading…</p>
+      <section
+        id="one-click-section"
+        style="
+          background: #e0f2fe;
+          padding: 12px;
+          border-radius: 8px;
+          border: 1px solid #7dd3fc;
+          margin: 16px 0;
+        ">
+        <h2 style="margin-top: 0; color: #0369a1">
+          🚀 1-Click Connect (Default Server)
+        </h2>
+        <p style="margin: 4px 0 10px 0">
+          Connect this Chrome profile directly to your VPS server with
+          pre-configured settings.
+        </p>
+        <button
+          id="one-click-connect"
+          type="button"
+          style="
+            background: #0284c7;
+            color: white;
+            border: none;
+            padding: 10px 18px;
+            border-radius: 6px;
+            font-weight: bold;
+            cursor: pointer;
+          ">
+          ⚡ Aktifkan Sinkronisasi Sekarang
+        </button>
+      </section>
+      <details style="margin-top: 14px">
+        <summary style="cursor: pointer; color: #666; font-size: 0.9em">
+          Custom Profile / Manual Connection Options
+        </summary>
+        <section id="connect-section" style="margin-top: 10px">
+          <h3>Custom Connection JSON</h3>
+          <p>
+            Import a custom profile connection JSON for secondary Chrome
+            profiles.
+          </p>
+          <div style="margin-bottom: 8px">
+            <button id="paste-clipboard" type="button">
+              📋 Paste from clipboard
+            </button>
+            <span
+              id="clipboard-hint"
+              style="font-size: 0.85em; color: #666; margin-left: 8px"></span>
+          </div>
+          <label for="connection-json">Or paste connection JSON:</label>
+          <textarea
+            id="connection-json"
+            rows="3"
+            style="
+              width: 100%;
+              font-family: monospace;
+              font-size: 0.85em;
+              margin-bottom: 8px;
+            "
+            placeholder='{"endpoint": "https://...", "deviceId": "...", "token": "..."}'></textarea>
+          <label for="connection-file">Or choose file:</label>
+          <input
+            id="connection-file"
+            type="file"
+            accept=".json,application/json" />
+          <div style="margin-top: 10px">
+            <button id="import-connection" type="button" disabled>
+              Grant permissions and connect custom
+            </button>
+          </div>
+        </section>
+        <form id="pair">
+          <h3>Pair with code</h3>
+          <label for="endpoint">HTTPS Tailscale endpoint</label>
+          <input
+            id="endpoint"
+            type="url"
+            required
+            placeholder="https://your-node.your-tailnet.ts.net:8443"
+            autocomplete="off" />
+          <label for="code">One-time pairing code</label>
+          <input
+            id="code"
+            type="password"
+            required
+            autocomplete="off"
+            maxlength="128" />
+          <button id="pair-button">Grant permissions and pair</button>
+        </form>
+      </details>
+      <section>
+        <h2>Paired profile</h2>
+        <p>
+          Account changes are rejected by the server, never automatically
+          confirmed. If blocked, inspect the server and deliberately unpair
+          before pairing again.
+        </p>
+        <button id="unpair" type="button">Revoke pairing</button>
+      </section>
+      <form id="refresh">
+        <h2>Optional tab refresh</h2>
+        <p>
+          Off by default. Reload only the selected existing Gemini tab when
+          inactive. An inactive tab can still generate a response: reloading can
+          interrupt it. No tabs are created and active tabs are never reloaded.
+        </p>
+        <label
+          ><input id="refresh-enabled" type="checkbox" /> Enable periodic
+          refresh</label
+        >
+        <label for="tab">Existing Gemini tab (ID)</label>
+        <select id="tab">
+          <option value="">No Gemini tab available</option>
+        </select>
+        <label for="minutes">Interval in minutes (15–1440, default 30)</label>
+        <input
+          id="minutes"
+          type="number"
+          min="15"
+          max="1440"
+          value="30"
+          required />
+        <button>Save refresh preference</button>
+      </form>
+      <section id="profiles-section">
+        <h2>Connected profiles</h2>
+        <p>
+          All Chrome profiles connected to this server. Each profile controls
+          only its own refresh schedule. Table refreshes automatically every 30
+          seconds while this page is open.
+        </p>
+        <div class="profiles-controls">
+          <button id="refresh-status-btn" type="button">Refresh status</button>
+          <small>Auto-refresh: 30 s</small>
+        </div>
+        <table>
+          <thead>
+            <tr>
+              <th>Label</th>
+              <th>Current</th>
+              <th>Online</th>
+              <th>Sync status</th>
+              <th>Last seen</th>
+              <th>Last accepted</th>
+              <th>Refresh (interval / next)</th>
+            </tr>
+          </thead>
+          <tbody id="profiles-tbody">
+            <tr>
+              <td colspan="7">Loading…</td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
+      <p>
+        No cookie values or pairing tokens are displayed. Network failures retry
+        with freshly read cookies after 1–5 minutes. Local logout is detected
+        from a complete snapshot, not individual removal events.
+      </p>
+    </main>
+  </body>
+</html>

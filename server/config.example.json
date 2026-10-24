@@ -1,0 +1,10 @@
+{
+  "allowedHosts": ["your-node.your-tailnet.ts.net"],
+  "backends": {
+    "personal-profile": {
+      "url": "http://127.0.0.1:8083",
+      "adminToken": "REPLACE_LOCALLY",
+      "apiKey": "REPLACE_LOCALLY"
+    }
+  }
+}

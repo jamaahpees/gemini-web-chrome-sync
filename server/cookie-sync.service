@@ -1,0 +1,25 @@
+[Unit]
+Description=Private Gemini profile cookie bridge
+After=network.target
+
+[Service]
+Type=simple
+User=cookie-sync
+Group=cookie-sync
+UMask=0077
+StateDirectory=cookie-sync
+StateDirectoryMode=0700
+ExecStart=/usr/bin/python3 /opt/gemini-cookie-sync/server/cookie_sync.py --config /etc/cookie-sync/config.json --state /var/lib/cookie-sync serve
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+LimitCORE=0
+StandardOutput=null
+StandardError=null
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,251 @@
+diff --git a/internal/app/admin_cookies.go b/internal/app/admin_cookies.go
+index f17a675..dba9940 100644
+--- a/internal/app/admin_cookies.go
++++ b/internal/app/admin_cookies.go
+@@ -88,13 +88,14 @@ func handleAdminCookies(w http.ResponseWriter, r *http.Request) {
+ 			Label  string `json:"label"`
+ 			Cookie string `json:"cookie"`
+ 			Note   string `json:"note"`
++			Status string `json:"status"`
+ 		}
+ 		body, _ := io.ReadAll(r.Body)
+ 		if err := json.Unmarshal(body, &p); err != nil {
+ 			writeJSON(w, 400, map[string]string{"error": "bad json"})
+ 			return
+ 		}
+-		id, err := accountAdd(p.Label, p.Cookie, p.Note)
++		id, err := accountAddWithStatus(p.Label, p.Cookie, p.Note, p.Status)
+ 		if err != nil {
+ 			writeJSON(w, 400, map[string]string{"error": err.Error()})
+ 			return
+diff --git a/internal/app/cookie_pool.go b/internal/app/cookie_pool.go
+index 6a88ac2..b0cc39d 100644
+--- a/internal/app/cookie_pool.go
++++ b/internal/app/cookie_pool.go
+@@ -94,6 +94,16 @@ func cookieNames(cookie string) []string {
+ // 一份没填的逐项模板（键名在、值全空）放进池子，存成一整段 JSON，
+ // 之后每次轮到它都注定失败。
+ func accountAdd(label, cookie, note string) (int64, error) {
++	return accountAddWithStatus(label, cookie, note, "")
++}
++
++func accountAddWithStatus(label, cookie, note, status string) (int64, error) {
++	if status == "" {
++		status = "enabled"
++	}
++	if status != "enabled" && status != "disabled" {
++		return 0, fmt.Errorf("非法状态 %q", status)
++	}
+ 	c, ok := normalizeCookie(cookie, "手工添加的 cookie")
+ 	if !ok {
+ 		return 0, fmt.Errorf("cookie 解析失败：既不是 \"k=v; k=v\" 串，也不是可识别的 JSON")
+@@ -101,7 +111,7 @@ func accountAdd(label, cookie, note string) (int64, error) {
+ 	if extractSAPISID(c) == "" {
+ 		return 0, fmt.Errorf("cookie 里没有 SAPISID，多半没复制全（需要 gemini.google.com 下的完整 cookie，至少含 SID / HSID / SSID / APISID / SAPISID / __Secure-1PSID）")
+ 	}
+-	return accountInsert(label, c, note)
++	return accountInsertWithStatus(label, c, note, status)
+ }
+ 
+ // accountAdopt 是启动时导入既有配置专用的：**不做 SAPISID 检查**。
+@@ -123,13 +133,17 @@ func accountAdopt(label, cookie, note string) (int64, error) {
+ }
+ 
+ func accountInsert(label, cookie, note string) (int64, error) {
++	return accountInsertWithStatus(label, cookie, note, "enabled")
++}
++
++func accountInsertWithStatus(label, cookie, note, status string) (int64, error) {
+ 	cookie = strings.TrimSpace(cookie)
+ 	if cookie == "" {
+ 		return 0, fmt.Errorf("cookie 不能为空")
+ 	}
+ 	return insertID(
+ 		`INSERT INTO accounts(label, cookie, status, note, created_at) VALUES (?,?,?,?,?)`,
+-		strings.TrimSpace(label), cookie, "enabled", strings.TrimSpace(note), time.Now().Unix())
++		strings.TrimSpace(label), cookie, status, strings.TrimSpace(note), time.Now().Unix())
+ }
+ 
+ // accountList 返回池里全部账号，按 id 升序。
+@@ -584,6 +598,10 @@ func accountDisplayName(a *CookieAccount) string {
+ 	return fmt.Sprintf("#%d", a.ID)
+ }
+ 
++func browserCookieSource() bool {
++	return os.Getenv("GEMINI_BROWSER_COOKIE_SOURCE") == "1"
++}
++
+ // mergeSetCookie 把响应下发的 Set-Cookie 合并进现有 cookie 串。
+ //
+ // 服务端几乎每个响应都在刷新 SIDCC / __Secure-1PSIDCC / __Secure-3PSIDCC
+@@ -593,7 +611,7 @@ func accountDisplayName(a *CookieAccount) string {
+ // 顺序保持原样、新键追加在后：cookie 顺序本身不影响语义，但保持稳定能让
+ // poolHasCookie 那类按内容比对的地方不至于每次都认成新值。
+ func mergeSetCookie(cookie string, setCookie []string) string {
+-	if len(setCookie) == 0 {
++	if browserCookieSource() || len(setCookie) == 0 {
+ 		return cookie
+ 	}
+ 	updates := map[string]string{}
+@@ -656,7 +674,7 @@ func cookieIdentity(cookie string) string {
+ // 在面板上显示的还是原来的标签，实际发出去的却是别人的会话，而且**完全静默**。
+ // 身份对不上就不写，宁可让这次刷新白费。
+ func updateAccountCookie(id int64, cookie string) {
+-	if id <= 0 || cookie == "" {
++	if browserCookieSource() || id <= 0 || cookie == "" {
+ 		return
+ 	}
+ 	var cur string
+diff --git a/internal/app/gemini.go b/internal/app/gemini.go
+index cb3ae0f..93c3be4 100644
+--- a/internal/app/gemini.go
++++ b/internal/app/gemini.go
+@@ -438,7 +438,7 @@ func streamGenerateWithFiles(prompt, latest string, mc ModelConfig, pending []pe
+ 		// 轮转会换发 __Secure-1PSIDTS（约 30 分钟过期的那张票）并合并 *SIDCC。
+ 		// 只是票过期、持久身份还在的号，这一步能救回来；救不回来再换号。
+ 		// 只试一次，且只在这一轮。
+-		if !rotatedOnce[acct.ID] {
++		if !browserCookieSource() && !rotatedOnce[acct.ID] {
+ 			rotatedOnce[acct.ID] = true
+ 			if _, _, rerr := rotateAccount(*acct); rerr == nil {
+ 				if fresh := accountByID(acct.ID); fresh != nil {
+diff --git a/internal/app/rotate.go b/internal/app/rotate.go
+index 67c2ff8..7eb701a 100644
+--- a/internal/app/rotate.go
++++ b/internal/app/rotate.go
+@@ -60,6 +60,9 @@ var rotateInitRe = regexp.MustCompile(`init\('([^']{4,64})'\s*,\s*([0-9.]+)\s*,[
+ // rotateAccount 给一个账号做一次保活：先刷 1PSIDTS，再刷 SIDCC。
+ // 返回服务端建议的下次间隔，以及这一轮实际刷新的 cookie 名。
+ func rotateAccount(a CookieAccount) (time.Duration, []string, error) {
++	if browserCookieSource() {
++		return defaultRotateInterval, nil, nil
++	}
+ 	proxyURL := ""
+ 	if a.ProxyID > 0 {
+ 		proxyURL = proxyURLByID(a.ProxyID)
+diff --git a/internal/app/browser_source_test.go b/internal/app/browser_source_test.go
+new file mode 100644
+index 0000000..8c37bdb
+--- /dev/null
++++ b/internal/app/browser_source_test.go
+@@ -0,0 +1,120 @@
++package app
++
++import (
++	"encoding/json"
++	"net/http"
++	"net/http/httptest"
++	"strings"
++	"sync/atomic"
++	"testing"
++)
++
++func TestBrowserSourceRotateAccountSkipsNetwork(t *testing.T) {
++	t.Setenv("GEMINI_BROWSER_COOKIE_SOURCE", "1")
++	var calls atomic.Int64
++	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++		calls.Add(1)
++		w.WriteHeader(http.StatusForbidden)
++	}))
++	defer server.Close()
++	proxyID, err := proxyCreate("browser-source-test", server.URL, 1)
++	if err != nil {
++		t.Fatal(err)
++	}
++	t.Cleanup(func() {
++		_, _ = getDB().Exec(`DELETE FROM proxies WHERE id=?`, proxyID)
++		loadProxies()
++	})
++	original := "SAPISID=browser; __Secure-1PSID=browser; SIDCC=original"
++	id, err := accountAdd("browser", original, "")
++	if err != nil {
++		t.Fatal(err)
++	}
++	t.Cleanup(func() { _ = accountDelete(id) })
++	interval, names, err := rotateAccount(CookieAccount{ID: id, Cookie: original, ProxyID: proxyID})
++	if err != nil || interval != defaultRotateInterval || len(names) != 0 {
++		t.Errorf("rotation = (%v, %v, %v), want default interval and no changes", interval, names, err)
++	}
++	if calls.Load() != 0 {
++		t.Errorf("rotation made %d network requests", calls.Load())
++	}
++	if a := accountByID(id); a == nil || a.Cookie != original {
++		t.Fatal("rotation changed imported cookie")
++	}
++}
++
++func TestBrowserSourceUpdateAccountCookieNoop(t *testing.T) {
++	t.Setenv("GEMINI_BROWSER_COOKIE_SOURCE", "1")
++	original := "SAPISID=browser; __Secure-1PSID=browser; SIDCC=original"
++	id, err := accountAdd("browser", original, "")
++	if err != nil {
++		t.Fatal(err)
++	}
++	t.Cleanup(func() { _ = accountDelete(id) })
++	updateAccountCookie(id, strings.ReplaceAll(original, "original", "response"))
++	if a := accountByID(id); a == nil || a.Cookie != original {
++		t.Fatal("response cookie overwrote imported cookie")
++	}
++}
++
++func TestBrowserSourceResponseCookieRemainsOriginal(t *testing.T) {
++	original := "SAPISID=browser; SIDCC=original"
++	for _, mode := range []string{"1", "", "0", "true"} {
++		t.Run("mode="+mode, func(t *testing.T) {
++			t.Setenv("GEMINI_BROWSER_COOKIE_SOURCE", mode)
++			got := mergeSetCookie(original, []string{"SIDCC=response; Path=/", "NEW=response; Path=/"})
++			if mode == "1" {
++				if got != original {
++					t.Fatal("response merge changed browser-authoritative cookie")
++				}
++			} else if cookieValue(got, "SIDCC") != "response" || cookieValue(got, "NEW") != "response" {
++				t.Fatal("default response merge behavior changed")
++			}
++		})
++	}
++}
++
++func TestAdminCookiesImportStatus(t *testing.T) {
++	for _, tc := range []struct {
++		name, status, want string
++		code               int
++	}{
++		{"omitted", "", "enabled", 200},
++		{"enabled", "enabled", "enabled", 200},
++		{"disabled", "disabled", "disabled", 200},
++		{"invalid", "DISABLED", "", 400},
++	} {
++		t.Run(tc.name, func(t *testing.T) {
++			before, _ := accountCount()
++			body := map[string]string{"label": "import", "cookie": "SAPISID=browser", "note": "test"}
++			if tc.status != "" {
++				body["status"] = tc.status
++			}
++			data, err := json.Marshal(body)
++			if err != nil {
++				t.Fatal(err)
++			}
++			w := httptest.NewRecorder()
++			handleAdminCookies(w, httptest.NewRequest(http.MethodPost, "/admin/api/cookies", strings.NewReader(string(data))))
++			var result struct {
++				ID int64 `json:"id"`
++			}
++			_ = json.Unmarshal(w.Body.Bytes(), &result)
++			if result.ID > 0 {
++				t.Cleanup(func() { _ = accountDelete(result.ID) })
++			}
++			if w.Code != tc.code {
++				t.Fatalf("HTTP %d, want %d", w.Code, tc.code)
++			}
++			if tc.code == 400 {
++				if after, _ := accountCount(); after != before {
++					t.Fatal("invalid status inserted an account")
++				}
++				return
++			}
++			if a := accountByID(result.ID); a == nil || a.Status != tc.want {
++				t.Fatalf("import did not start with status %q", tc.want)
++			}
++		})
++	}
++}
