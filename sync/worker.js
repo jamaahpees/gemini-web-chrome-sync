@@ -299,6 +299,52 @@ export function createSyncWorker(api, fetcher = fetch) {
               .map(tab => ({ id: tab.id, active: tab.active })),
           };
         }
+        case 'getCleanup':
+        case 'setCleanup': {
+          if (!state.token) throw new Error('Pair this profile first.');
+          const setting = message.action === 'setCleanup';
+          if (
+            setting &&
+            (typeof message.enabled !== 'boolean' ||
+              Object.keys(message).some(
+                key => !['type', 'action', 'enabled'].includes(key)
+              ))
+          )
+            throw new Error('Invalid cleanup preference.');
+          let result;
+          try {
+            result = await request(
+              state,
+              '/v1/cleanup',
+              setting ? 'POST' : 'GET',
+              setting ? { enabled: message.enabled } : undefined
+            );
+          } catch (error) {
+            if (error.message === 'unauthorized') {
+              state.status = 'unauthorized';
+              await save(state);
+              throw new Error('unauthorized');
+            }
+            throw new Error('Cleanup request failed. Check server connection.');
+          }
+          if (
+            !result ||
+            Array.isArray(result) ||
+            typeof result.enabled !== 'boolean' ||
+            typeof result.multiTurn !== 'boolean' ||
+            typeof result.temporaryChat !== 'boolean' ||
+            result.bestEffort !== true
+          )
+            throw new Error('Invalid cleanup response.');
+          return setting
+            ? { ok: true }
+            : {
+                enabled: result.enabled,
+                multiTurn: result.multiTurn,
+                temporaryChat: result.temporaryChat,
+                bestEffort: true,
+              };
+        }
         case 'fetchProfiles': {
           if (!state.token) throw new Error('Pair this profile first.');
           let result;

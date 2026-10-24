@@ -215,6 +215,94 @@ function fixture(fetcher) {
 }
 const response = data => ({ ok: true, status: 200, json: async () => data });
 
+test('cleanup commands authenticate and return only validated backend flags', async () => {
+  const flags = {
+    enabled: false,
+    multiTurn: false,
+    temporaryChat: false,
+    bestEffort: true,
+  };
+  const calls = [];
+  const f = fixture(async (data, url, options) => {
+    calls.push(options);
+    assert.equal(url, data.geminiSync.endpoint + '/v1/cleanup');
+    assert.equal(options.headers.Authorization, 'Bearer test-token');
+    return response({ ...flags, token: 'private', extra: 'private' });
+  });
+  assert.deepEqual(await f.worker.command({ action: 'getCleanup' }), flags);
+  assert.deepEqual(
+    await f.worker.command({ action: 'setCleanup', enabled: false }),
+    { ok: true }
+  );
+  assert.equal(calls[0].method, 'GET');
+  assert.equal(calls[1].method, 'POST');
+  assert.deepEqual(JSON.parse(calls[1].body), { enabled: false });
+});
+
+test('cleanup rejects unpaired commands and non-boolean or extra mutation fields', async () => {
+  let calls = 0;
+  const f = fixture(async () => {
+    calls++;
+    return response({});
+  });
+  for (const enabled of [undefined, null, 0, 1, 'true', {}, []]) {
+    await assert.rejects(f.worker.command({ action: 'setCleanup', enabled }));
+  }
+  await assert.rejects(
+    f.worker.command({ action: 'setCleanup', enabled: true, token: 'injected' })
+  );
+  delete f.data.geminiSync;
+  for (const action of ['getCleanup', 'setCleanup']) {
+    await assert.rejects(f.worker.command({ action, enabled: false }), /Pair/);
+  }
+  assert.equal(calls, 0);
+});
+
+test('cleanup rejects invalid backend flags and never returns backend errors or secrets', async () => {
+  for (const result of [
+    null,
+    [],
+    {},
+    {
+      enabled: 'false',
+      multiTurn: false,
+      temporaryChat: false,
+      bestEffort: true,
+    },
+    { enabled: false, multiTurn: null, temporaryChat: false, bestEffort: true },
+    { enabled: false, multiTurn: false, temporaryChat: 0, bestEffort: true },
+    {
+      enabled: false,
+      multiTurn: false,
+      temporaryChat: false,
+      bestEffort: false,
+    },
+  ]) {
+    const f = fixture(async () => response(result));
+    await assert.rejects(
+      f.worker.command({ action: 'getCleanup' }),
+      /response/i
+    );
+    await assert.rejects(
+      f.worker.command({ action: 'setCleanup', enabled: false }),
+      /response/i
+    );
+  }
+  const f = fixture(async () => ({ ok: false, status: 401 }));
+  await assert.rejects(
+    f.worker.command({ action: 'getCleanup' }),
+    /unauthorized/
+  );
+  assert.equal(f.data.geminiSync.status, 'unauthorized');
+  const failing = fixture(async () => {
+    throw new Error('private-token');
+  });
+  await assert.rejects(
+    failing.worker.command({ action: 'getCleanup' }),
+    error => !error.message.includes('private-token')
+  );
+});
+
 test('connection import verifies token before storing and refuses replacement', async () => {
   const f = fixture(async () =>
     response({ syncRequested: true, status: 'awaiting_sync', lastApplied: 0 })

@@ -37,6 +37,7 @@ The following captures render the extension itself with **synthetic demonstratio
 | [HTTP API](docs/API.md) | Authentication, request/response examples, ordering and errors |
 | [Operations](docs/OPERATIONS.md) | Deployment, diagnosis, recovery, backups and rollback |
 | [Output contracts](docs/OUTPUT-CONTRACTS.md) | Optional default, JSON and code-only response modes |
+| [Chat cleanup](docs/CHAT-CLEANUP.md) | Optional best-effort deletion of backend-created conversations |
 | [Response adapter](docs/RESPONSE-ADAPTER.md) | Validation findings, tested patches and remaining limitations |
 | [Contributing](CONTRIBUTING.md) | Development, tests and safe pull requests |
 | [Security](SECURITY.md) | Credential handling and private-network requirements |

@@ -59,6 +59,19 @@ All POST bodies must be JSON with a single valid Content-Length, at most 65,536 
 - `GET /v1/profiles`, Bearer token → `{ "profiles": [...] }`. Returns metadata for all non-revoked devices sharing the same operator config. See **Profile visibility** below.
 - `POST /v1/heartbeat`, Bearer token, `{ "refresh": { "enabled": bool, "minutes": 15..1440, "lastRefreshAt": epoch_seconds, "nextRefreshAt": epoch_seconds } }` → `{ "status": "ok" }`. Updates the caller's refresh telemetry and `lastSeen` only. The server does **not** use these values to control remote operations; they are client-reported state.
 
+### Best-effort conversation cleanup
+
+- `GET /v1/cleanup`, Bearer token → `{ "enabled": false, "multiTurn": false, "temporaryChat": false, "bestEffort": true }`.
+- `POST /v1/cleanup`, Bearer token, exactly `{ "enabled": true }` (or `false`) → the same four-field response, read back from the backend after updating. Unknown fields, missing fields, and non-boolean values return 400 `invalid_cleanup`.
+
+These endpoints address only the caller's permanently bound, dedicated backend. No request may select another profile, URL, admin path, or credentials. Missing, invalid, or revoked tokens return 401. No cookies, API keys, admin tokens, full configuration, or backend URLs are returned. Cleanup settings are not cached or stored in SQLite: the actual backend runtime config is the source of truth.
+
+Adapter contract: authenticated GET `/admin/api/config` must return an object with a `config` object containing actual JSON booleans `auto_delete_conversation`, `multi_turn`, and `temporary_chat`. Missing flags or wrong types fail closed with 503 `backend_unavailable`; they are never defaulted or coerced. The adapter preserves **every** field in that runtime `config` object, including unknown/nested fields, changes only `auto_delete_conversation`, and PUTs the entire object to the same fixed endpoint. The outer `deploy`/`models` metadata is not runtime configuration and is not PUT. A fresh GET verifies the entire runtime object, not just the cleanup flag; mismatches return 503 `backend_partial_failure`. Transport/JSON errors are sanitized as `backend_unavailable` without exposing backend error text. A failed response does not prove the PUT had no effect; re-read before retrying.
+
+Enabling returns 409 `cleanup_conflict` without a PUT if `multi_turn` or `temporary_chat` is true, even if cleanup was already enabled. Disabling remains allowed with either mode enabled. This API never turns on or changes multi-turn or temporary-chat mode, or intentionally changes any unrelated setting. Read/modify/write/re-read runs under the store lock and SQLite IMMEDIATE transaction, shared with cookie operations. External admin writers are not covered by that lock: **do not edit backend config concurrently**, or a full-config PUT could overwrite an external edit. There is no backend compare-and-swap or distributed transaction.
+
+This toggles the backend's **best-effort deletion of newly generated conversations after responses**. It does not prove a conversation was actually removed from Google, does not guarantee deletion or privacy, and offers no mass-clear/history-deletion operation. The `bestEffort: true` marker is always present, including when disabled. Existing conversations are not cleared. Verify this config contract against the deployed backend version before use; tests exercise local synthetic HTTP backends only.
+
 ### Profile visibility
 
 `GET /v1/profiles` returns metadata for every non-revoked device registered in the same service instance (i.e., devices sharing the same operator config and state directory). This is intentional: an operator running multiple Chrome profiles points each at a different backend, and the extension can display peer-profile status without cross-origin requests. Revoked devices are excluded entirely.

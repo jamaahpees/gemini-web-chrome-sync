@@ -49,9 +49,12 @@ class Backend:
         self.opener = build_opener(NoRedirect(), ProxyHandler({}))
 
     def request(self, method, suffix='', body=None):
+        return self._request(method, '/admin/api/cookies' + suffix, body)
+
+    def _request(self, method, path, body=None):
         headers = {'Authorization': 'Bearer ' + self.config['adminToken'],
                    'x-api-key': self.config['apiKey'], 'Content-Type': 'application/json'}
-        req = Request(self.config['url'].rstrip('/') + '/admin/api/cookies' + suffix,
+        req = Request(self.config['url'].rstrip('/') + path,
                       data=None if body is None else json.dumps(body).encode(),
                       headers=headers, method=method)
         try:
@@ -62,6 +65,35 @@ class Backend:
                 return json.loads(raw) if raw else {}
         except (HTTPError, URLError, TimeoutError, OSError, ValueError):
             raise Failure(503, 'backend_unavailable') from None
+
+    def _runtime_config(self):
+        data = self._request('GET', '/admin/api/config')
+        config = data.get('config') if isinstance(data, dict) else None
+        if (not isinstance(config, dict)
+                or any(type(config.get(key)) is not bool for key in
+                       ('auto_delete_conversation', 'multi_turn', 'temporary_chat'))):
+            raise Failure(503, 'backend_unavailable')
+        return config
+
+    def _cleanup_settings(self, config):
+        return {'enabled': config['auto_delete_conversation'], 'multiTurn': config['multi_turn'],
+                'temporaryChat': config['temporary_chat'], 'bestEffort': True}
+
+    def cleanup_settings(self):
+        return self._cleanup_settings(self._runtime_config())
+
+    def set_cleanup(self, enabled):
+        if type(enabled) is not bool:
+            raise Failure(400, 'invalid_cleanup')
+        config = self._runtime_config()
+        if enabled and (config['multi_turn'] or config['temporary_chat']):
+            raise Failure(409, 'cleanup_conflict')
+        config['auto_delete_conversation'] = enabled
+        self._request('PUT', '/admin/api/config', config)
+        verified = self._runtime_config()
+        if json.dumps(verified, sort_keys=True) != json.dumps(config, sort_keys=True):
+            raise Failure(503, 'backend_partial_failure')
+        return self._cleanup_settings(verified)
 
     def rows(self):
         data = self.request('GET')
@@ -361,6 +393,23 @@ class Store:
             db.execute('UPDATE devices SET last_seen=? WHERE id=?', (int(time.time()), row['id']))
             return {'syncRequested': requested, 'status': status, 'lastApplied': row['applied']}
 
+    def cleanup_settings(self, token):
+        with self.lock, self.db() as db:
+            db.execute('BEGIN IMMEDIATE')
+            row = self.auth(db, token)
+            backend = self.factory(self.config['backends'][row['backend']])
+            return backend.cleanup_settings()
+
+    def set_cleanup(self, token, body):
+        with self.lock, self.db() as db:
+            db.execute('BEGIN IMMEDIATE')
+            row = self.auth(db, token)
+            if (not isinstance(body, dict) or set(body) != {'enabled'}
+                    or type(body['enabled']) is not bool):
+                raise Failure(400, 'invalid_cleanup')
+            backend = self.factory(self.config['backends'][row['backend']])
+            return backend.set_cleanup(body['enabled'])
+
     def heartbeat(self, token, body):
         if not isinstance(body, dict) or set(body) != {'refresh'}:
             raise Failure(400, 'invalid_heartbeat')
@@ -517,7 +566,8 @@ class Handler(BaseHTTPRequestHandler):
                 raise Failure(400, 'invalid_host')
             if (self.command, self.path) not in {('POST', '/v1/pair'), ('DELETE', '/v1/pair'),
                                                ('GET', '/v1/status'), ('POST', '/v1/snapshot'),
-                                               ('POST', '/v1/heartbeat'), ('GET', '/v1/profiles')}:
+                                               ('POST', '/v1/heartbeat'), ('GET', '/v1/profiles'),
+                                               ('GET', '/v1/cleanup'), ('POST', '/v1/cleanup')}:
                 raise Failure(404, 'not_found')
             if self.headers.get('Transfer-Encoding') or self.headers.get('Expect'):
                 raise Failure(400, 'invalid_framing')
@@ -559,6 +609,9 @@ class Handler(BaseHTTPRequestHandler):
                     result = store.status(token)
                 elif self.path == '/v1/profiles':
                     result = store.profiles(token)
+                elif self.path == '/v1/cleanup':
+                    result = (store.cleanup_settings(token) if self.command == 'GET'
+                              else store.set_cleanup(token, body))
                 elif self.path == '/v1/heartbeat':
                     result = store.heartbeat(token, body)
                 else:

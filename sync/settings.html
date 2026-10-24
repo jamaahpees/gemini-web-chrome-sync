@@ -179,6 +179,29 @@
           required />
         <button>Save refresh preference</button>
       </form>
+      <form id="cleanup">
+        <h2>Backend chat cleanup</h2>
+        <p id="cleanup-help">
+          Only backend-created chats. Deletion best effort; does not delete
+          browser cookies or all history. Requires non-multi-turn, non-temporary
+          backend.
+        </p>
+        <label>
+          <input
+            id="cleanup-enabled"
+            type="checkbox"
+            aria-describedby="cleanup-help cleanup-status"
+            disabled />
+          Enable backend chat cleanup
+        </label>
+        <button id="cleanup-save" disabled>Save cleanup preference</button>
+        <button id="cleanup-refresh" type="button" disabled>
+          Refresh cleanup state
+        </button>
+        <p id="cleanup-status" role="status" aria-live="polite">
+          Cleanup state unknown. Pair this profile to load backend settings.
+        </p>
+      </form>
       <section id="profiles-section">
         <h2>Connected profiles</h2>
         <p>

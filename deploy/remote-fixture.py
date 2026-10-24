@@ -31,6 +31,8 @@ def main():
     counters = {'testOnly': True, 'creates': 0, 'checks': 0, 'enables': 0,
                 'disables': 0, 'deletes': 0, 'rejected': 0}
     next_id = 0
+    backend_config = {'auto_delete_conversation': False, 'multi_turn': False, 'temporary_chat': False,
+                      'retry_attempts': 1, 'request_timeout_sec': 180}
 
     def persist():
         metadata = dict(counters, rows=len(rows),
@@ -62,6 +64,19 @@ def main():
                     and hmac.compare_digest(self.headers.get('x-api-key', ''), target['apiKey'])):
                 return self.reply(401, {'error': 'unauthorized'})
             parts = urlsplit(self.path).path.strip('/').split('/')
+            if parts == ['admin', 'api', 'config']:
+                if self.command == 'GET':
+                    return self.reply(200, {'config': backend_config})
+                if self.command == 'PUT':
+                    size = int(self.headers.get('Content-Length', '0'))
+                    if not 0 < size <= 65536:
+                        return self.reply(400, {})
+                    body = json.loads(self.rfile.read(size))
+                    if set(body) != set(backend_config) or type(body.get('auto_delete_conversation')) is not bool:
+                        return self.reply(400, {})
+                    backend_config.update(body)
+                    return self.reply(200, {'config': backend_config})
+                return self.reply(405, {})
             if parts[:3] != ['admin', 'api', 'cookies']:
                 return self.reply(404, {})
             try:
@@ -109,7 +124,7 @@ def main():
             except (ValueError, TypeError, KeyError):
                 return self.reply(400, {'error': 'invalid_request'})
 
-        do_GET = do_POST = do_PATCH = do_DELETE = handle_request
+        do_GET = do_POST = do_PUT = do_PATCH = do_DELETE = handle_request
 
     persist()
     server = HTTPServer(('127.0.0.1', 8099), Handler)

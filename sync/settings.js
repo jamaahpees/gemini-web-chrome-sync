@@ -29,6 +29,54 @@ function formatRemaining(nextRefreshAt) {
   return m > 0 ? ` (in ${m}m ${s}s)` : ` (in ${s}s)`;
 }
 
+let cleanupPaired = false;
+let cleanupState;
+let cleanupBusy = false;
+
+function cleanupControls() {
+  const blocked = cleanupState?.multiTurn || cleanupState?.temporaryChat;
+  element('cleanup-enabled').disabled =
+    !cleanupPaired ||
+    cleanupBusy ||
+    !cleanupState ||
+    (blocked && !cleanupState.enabled);
+  element('cleanup-save').disabled =
+    !cleanupPaired || cleanupBusy || !cleanupState;
+  element('cleanup-refresh').disabled = !cleanupPaired || cleanupBusy;
+}
+
+async function renderCleanup() {
+  cleanupBusy = true;
+  cleanupControls();
+  try {
+    const result = await message({ action: 'getCleanup' });
+    if (
+      !result ||
+      result.ok === false ||
+      typeof result.enabled !== 'boolean' ||
+      typeof result.multiTurn !== 'boolean' ||
+      typeof result.temporaryChat !== 'boolean' ||
+      result.bestEffort !== true
+    )
+      throw new Error('Cleanup state unavailable. Refresh to retry.');
+    cleanupState = result;
+    element('cleanup-enabled').checked = result.enabled;
+    element('cleanup-status').textContent =
+      `Backend cleanup is ${result.enabled ? 'on' : 'off'}.` +
+      (result.multiTurn || result.temporaryChat
+        ? ' Enabling requires a non-multi-turn, non-temporary backend. You can still turn cleanup off.'
+        : ' Changes require Save cleanup preference.');
+  } catch {
+    cleanupState = undefined;
+    element('cleanup-enabled').checked = false;
+    element('cleanup-status').textContent =
+      'Cleanup state unavailable. Refresh to retry; no preference was changed.';
+  } finally {
+    cleanupBusy = false;
+    cleanupControls();
+  }
+}
+
 async function render() {
   const state = await message({ action: 'state' });
   if (!state || state.ok === false) throw new Error('Settings unavailable.');
@@ -57,6 +105,16 @@ async function render() {
     option.selected = tab.id === state.refreshTabId;
     element('tab').append(option);
   }
+  const loadCleanup = state.paired && !cleanupPaired;
+  cleanupPaired = state.paired;
+  if (!cleanupPaired) {
+    cleanupState = undefined;
+    element('cleanup-enabled').checked = false;
+    element('cleanup-status').textContent =
+      'Cleanup state unknown. Pair this profile to load backend settings.';
+  }
+  cleanupControls();
+  if (loadCleanup) await renderCleanup();
   if (state.paired) {
     await renderProfiles();
   }
@@ -311,6 +369,36 @@ element('refresh').addEventListener('submit', async event => {
   } catch (error) {
     failed(error);
   }
+});
+
+element('cleanup').addEventListener('submit', async event => {
+  event.preventDefault();
+  if (!cleanupPaired || !cleanupState || cleanupBusy) return;
+  const enabled = element('cleanup-enabled').checked;
+  if (enabled && (cleanupState.multiTurn || cleanupState.temporaryChat)) {
+    element('cleanup-status').textContent =
+      'Enabling requires a non-multi-turn, non-temporary backend.';
+    return;
+  }
+  cleanupBusy = true;
+  cleanupControls();
+  try {
+    const result = await message({ action: 'setCleanup', enabled });
+    if (!result?.ok) throw new Error('Cleanup save failed.');
+    await renderCleanup();
+  } catch {
+    element('cleanup-status').textContent =
+      'Cleanup save failed. Refresh actual backend state before retrying.';
+    cleanupState = undefined;
+    element('cleanup-enabled').checked = false;
+  } finally {
+    cleanupBusy = false;
+    cleanupControls();
+  }
+});
+
+element('cleanup-refresh').addEventListener('click', async () => {
+  if (cleanupPaired && !cleanupBusy) await renderCleanup();
 });
 
 element('refresh-status-btn')?.addEventListener('click', async () => {

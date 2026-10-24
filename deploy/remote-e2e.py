@@ -28,7 +28,13 @@ def main():
     args = parser.parse_args()
     root = Path(__file__).resolve().parents[1]
     connection = json.loads(args.connection.read_text(encoding='utf-8-sig'))
-    assert connection.get('endpoint', '').rstrip('/') == ENDPOINT, 'Unexpected E2E endpoint'
+    endpoint = connection.get('endpoint', '').rstrip('/')
+    import ipaddress
+    from urllib.parse import urlsplit
+    parsed = urlsplit(endpoint)
+    assert parsed.scheme == 'http' and parsed.port == 8787 and ipaddress.IPv4Address(parsed.hostname) in ipaddress.IPv4Network('100.64.0.0/10'), 'Expected user Tailscale endpoint'
+    global ENDPOINT
+    ENDPOINT = endpoint
     assert connection.get('target') == 'e2e-test', 'Private connection must identify e2e-test target'
     assert connection.get('token') and connection.get('deviceId'), 'Missing E2E pairing'
     assert not args.screenshot.resolve().is_relative_to(root), 'Evidence must remain outside repository'
@@ -54,7 +60,7 @@ def main():
         manifest_path = extension / 'manifest.json'
         manifest = json.loads(manifest_path.read_text(encoding='utf-8'))
         manifest['host_permissions'] = list(dict.fromkeys(manifest.get('host_permissions', []) + [
-            'http://100.100.100.100/*', 'https://your-node.your-tailnet.ts.net/*', 'https://google.com/*', 'https://gemini.google.com/*']))
+            'http://' + parsed.hostname + '/*', 'https://google.com/*', 'https://gemini.google.com/*']))
         manifest_path.write_text(json.dumps(manifest), encoding='utf-8')
         with sync_playwright() as playwright:
             context = playwright.chromium.launch_persistent_context(
