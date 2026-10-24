@@ -12,4 +12,6 @@ Google session cookies are credentials and can grant access beyond Gemini. Use a
 - Prefer normal pairing for distributing this source. One-click credentials must be provisioned privately.
 - Synthetic E2E fixtures are testing-only. Never use their success response as proof of a real Google session.
 
+Documentation screenshots are generated with synthetic metadata. Do not replace them with unredacted screenshots from a real connection; settings fields and browser traces may expose credentials.
+
 To report a vulnerability, contact the repository owner privately. Do not open a public issue containing credentials or account data.

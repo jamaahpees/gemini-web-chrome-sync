@@ -117,7 +117,10 @@ test('Chrome permission pattern is exact-host without a port', () => {
   );
 });
 
-test('direct Tailscale transport accepts only designated private API', () => {
+test('direct Tailscale transport accepts user CGNAT addresses only', () => {
+  for (const ip of ['100.64.0.0', '100.127.255.255', '100.80.12.34']) {
+    assert.equal(endpointOrigin(`http://${ip}:8787`), `http://${ip}:8787`);
+  }
   assert.equal(
     endpointOrigin('http://100.100.100.100:8787'),
     'http://100.100.100.100:8787'
@@ -129,7 +132,9 @@ test('direct Tailscale transport accepts only designated private API', () => {
   for (const endpoint of [
     'http://100.100.100.100:8083',
     'http://192.168.1.1:8787',
-    'http://100.112.195.85:8787',
+    'http://100.128.0.1:8787',
+    'http://100.63.255.255:8787',
+    'http://100.080.12.34:8787',
     'http://100.100.100.100:8787/path',
   ]) {
     assert.throws(() => endpointOrigin(endpoint));

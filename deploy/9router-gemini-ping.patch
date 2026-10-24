@@ -1,0 +1,106 @@
+diff --git a/src/app/api/models/test/ping.js b/src/app/api/models/test/ping.js
+index 24119eb2..49ad5440 100644
+--- a/src/app/api/models/test/ping.js
++++ b/src/app/api/models/test/ping.js
+@@ -1,9 +1,27 @@
+-import { getApiKeys } from "@/lib/localDb";
++import { getApiKeys, getProviderNodes } from "@/lib/localDb";
+ import { UPDATER_CONFIG } from "@/shared/constants/config";
+ import { getConsistentMachineId } from "@/shared/utils/machineId";
+ 
+ const CLI_TOKEN_SALT = "9r-cli-auth";
+ 
++async function getChatPingTimeout(model) {
++  const route = String(model).split("/")[0];
++  if (!String(model).includes("/")) return 15000;
++  if (/^gweb(?:-|$)/i.test(route)) return 180000;
++
++  try {
++    const nodes = await getProviderNodes();
++    const node = nodes.find((item) => item.id === route || item.prefix === route);
++    if (node) {
++      const isGeminiWeb = /^gweb(?:-|$)/i.test(node.prefix || "")
++        || /^gemini[\s-]*web$/i.test(node.name || "")
++        || /^https?:\/\/gemini-web(?::\d+)?(?:\/|$)/i.test(node.baseUrl || "");
++      if (isGeminiWeb) return 180000;
++    }
++  } catch {}
++  return 15000;
++}
++
+ function createSilentWavFile() {
+   const sampleRate = 16000;
+   const channels = 1;
+@@ -130,24 +148,33 @@ export async function pingModelByKind(model, kind, baseUrl = `http://127.0.0.1:$
+     return { ok: true, latencyMs, error: null, status: res.status };
+   }
+ 
+-  const res = await fetch(`${baseUrl}/api/v1/chat/completions`, {
+-    method: "POST",
+-    headers,
+-    body: JSON.stringify({
+-      model,
+-      // 1024 tokens: reasoning models (ClinePass/kimi-k3, deepseek-v4-pro, etc.) spend
+-      // their budget on chain-of-thought before emitting an answer. A tiny probe like
+-      // max_tokens:16 starves the answer and yields a false "no choices" failure.
+-      // See issue #3010.
+-      max_tokens: 1024,
+-      stream: false,
+-      messages: [{ role: "user", content: "hi" }],
+-    }),
+-    signal: AbortSignal.timeout(15000),
+-  });
++  const timeoutMs = await getChatPingTimeout(model);
++  let res;
++  let rawText;
++  try {
++    res = await fetch(`${baseUrl}/api/v1/chat/completions`, {
++      method: "POST",
++      headers,
++      body: JSON.stringify({
++        model,
++        // 1024 tokens: reasoning models (ClinePass/kimi-k3, deepseek-v4-pro, etc.) spend
++        // their budget on chain-of-thought before emitting an answer. A tiny probe like
++        // max_tokens:16 starves the answer and yields a false "no choices" failure.
++        // See issue #3010.
++        max_tokens: 1024,
++        stream: false,
++        messages: [{ role: "user", content: "hi" }],
++      }),
++      signal: AbortSignal.timeout(timeoutMs),
++    });
++    rawText = await res.text();
++  } catch (error) {
++    if (error?.name === "TimeoutError" || error?.name === "AbortError") {
++      return { ok: false, error: `Provider test timeout after ${timeoutMs}ms`, latencyMs: Date.now() - start };
++    }
++    throw error;
++  }
+   const latencyMs = Date.now() - start;
+-
+-  const rawText = await res.text().catch(() => "");
+   let parsed = null;
+   try { parsed = rawText ? JSON.parse(rawText) : null; } catch {}
+ 
+@@ -206,5 +233,21 @@ export async function pingModelByKind(model, kind, baseUrl = `http://127.0.0.1:$
+     };
+   }
+ 
++  if (contentEmpty) {
++    return { ok: false, latencyMs, status: res.status, error: "Provider returned no completion content for this model" };
++  }
++
++  const content = String(firstChoice.message?.content || "").trim();
++  const normalizedContent = content.replace(/[ΓÇÖΓÇÿ]/g, "'").replace(/\s+/g, " ").toLowerCase();
++  const serviceErrors = [
++    "service error",
++    "service error. please try again later.",
++    "i'm having a hard time fulfilling your request. can i help you with something else instead?",
++    "i seem to be encountering an error. can i try something else for you?",
++  ];
++  if (serviceErrors.includes(normalizedContent)) {
++    return { ok: false, latencyMs, status: res.status, error: `Provider returned service error: ${content}` };
++  }
++
+   return { ok: true, latencyMs, error: null, status: res.status };
+ }

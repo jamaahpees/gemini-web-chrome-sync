@@ -126,10 +126,16 @@ function failed(error) {
   element('status').textContent = error.message;
 }
 
+let defaultProfile;
 const defaultConnection = fetch(
   chrome.runtime.getURL('sync/default-connection.json')
 )
   .then(response => (response.ok ? response.json() : null))
+  .then(connection => {
+    if (connection) endpointOrigin(connection.endpoint);
+    defaultProfile = connection;
+    return connection;
+  })
   .catch(() => null);
 
 // Request permissions directly in the click gesture, before awaiting file I/O.
@@ -137,10 +143,13 @@ element('one-click-connect')?.addEventListener('click', async () => {
   try {
     element('one-click-connect').disabled = true;
     element('one-click-connect').textContent = 'Connecting...';
+    if (!defaultProfile)
+      throw new Error(
+        'Load a private connection configuration or use manual pairing.'
+      );
     const granted = await chrome.permissions.request({
       origins: [
-        'http://100.100.100.100/*',
-        'https://your-node.your-tailnet.ts.net/*',
+        permissionPattern(defaultProfile.endpoint),
         'https://gemini.google.com/*',
         'https://google.com/*',
       ],

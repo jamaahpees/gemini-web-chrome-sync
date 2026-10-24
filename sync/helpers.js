@@ -25,11 +25,17 @@ const SESSION_NAMES = new Set([
 ]);
 
 export function endpointOrigin(input) {
-  if (
-    input === 'http://100.100.100.100:8787' ||
-    input === 'http://100.100.100.100:8787/'
-  ) {
-    return 'http://100.100.100.100:8787';
+  if (typeof input === 'string') {
+    const match =
+      /^http:\/\/(100\.(?:0|[1-9]\d{0,2})\.(?:0|[1-9]\d{0,2})\.(?:0|[1-9]\d{0,2})):8787\/?$/.exec(
+        input
+      );
+    if (match) {
+      const octets = match[1].split('.').map(Number);
+      if (octets[1] >= 64 && octets[1] <= 127 && octets.every(n => n <= 255)) {
+        return `http://${match[1]}:8787`;
+      }
+    }
   }
   if (
     typeof input !== 'string' ||

@@ -18,6 +18,29 @@ Chrome profile B -> scoped token B -> private Tailscale receiver -> dedicated ba
 
 Cookie values flow browser-to-server only. Server responses contain status, not cookie payloads. A connected profile can see status metadata for other configured profiles of the same operator; it cannot read their cookies or tokens.
 
+## Screenshots
+
+The following captures render the extension itself with **synthetic demonstration profiles**. They do not contain real account data and are not evidence of a live Google login.
+
+![Extension settings and refresh controls](docs/images/settings-demo.png)
+
+![Cross-profile connection status](docs/images/profiles-demo.png)
+
+## Documentation
+
+| Document | What it covers |
+|---|---|
+| [Product requirements](docs/PRD.md) | Users, scope, requirements, acceptance criteria and limitations |
+| [Architecture](docs/ARCHITECTURE.md) | Trust boundaries, data flow, account isolation and backend patch |
+| [Tech stack](docs/TECH-STACK.md) | Browser APIs, runtime, storage, dependencies and tooling |
+| [Usage guide](docs/USAGE.md) | Install, pair/import, refresh scheduling and reading profile status |
+| [HTTP API](docs/API.md) | Authentication, request/response examples, ordering and errors |
+| [Operations](docs/OPERATIONS.md) | Deployment, diagnosis, recovery, backups and rollback |
+| [Output contracts](docs/OUTPUT-CONTRACTS.md) | Optional default, JSON and code-only response modes |
+| [Response adapter](docs/RESPONSE-ADAPTER.md) | Validation findings, tested patches and remaining limitations |
+| [Contributing](CONTRIBUTING.md) | Development, tests and safe pull requests |
+| [Security](SECURITY.md) | Credential handling and private-network requirements |
+
 ## Start here
 
 1. Read [security guidance](SECURITY.md) and [server setup](server/README.md).
@@ -52,7 +75,7 @@ The public repository contains **no default token**. For a personal preconfigure
 
 ### Direct Tailscale IP mode
 
-HTTPS Serve is preferred. Direct HTTP is permitted only for the example endpoint `http://100.100.100.100:8787` in the extension source. Replace that example with your server's actual Tailscale IP in `sync/helpers.js`, `sync/settings.js`, and the corresponding tests before building. Configure receiver `allowedHosts` accordingly and use:
+HTTPS Serve is preferred. Direct HTTP accepts each user's canonical Tailscale IPv4 address in `100.64.0.0/10` on port `8787`; there is no IP belonging to the maintainer hardcoded as a destination. Set your own `http://YOUR_TAILSCALE_IP:8787` in your private connection configuration (or the manual pairing endpoint field). The extension requests permission for that exact host, not the whole range. `100.64.0.0/10` is an address range, **not a URL**. No network scanning or automatic server discovery is performed. Configure receiver `allowedHosts` accordingly and use:
 
 ```sh
 python3 server/cookie_sync.py --config /etc/cookie-sync/config.json --state /var/lib/cookie-sync serve --bind YOUR_TAILSCALE_IP --port 8787
@@ -91,6 +114,32 @@ python deploy/browser-smoke.py
 ```
 
 `deploy/remote-e2e.py` is an operator-run integration harness with synthetic credentials and an isolated remote fixture. Never configure that fixture as a real account backend. It tests actual network transport; its test manifest pregrants host permissions and does not test interactive permission dialogs. Existing upstream DevTools tests emit diagnostic warnings while passing.
+
+## Repository map
+
+```text
+sync/                    Chrome sync worker, settings UI and validation
+server/                  Python receiver, configuration example and tests
+test/                    Extension and upstream editor regression tests
+deploy/                  Operator scripts, backend patch and browser test harnesses
+docs/                    PRD, architecture, API, usage and operations
+docs/images/             Synthetic-data screenshots rendered with Playwright
+interface/, icons/       Original Cookie-Editor interface and assets
+```
+
+## Verification and known gaps
+
+At publication, the source test suites passed **61 JavaScript tests, 36 receiver tests, and 2 provisioning tests**; ESLint and the Chrome Grunt build passed. The original private deployment also exercised a synthetic remote fixture over Tailscale with Playwright: activation, cookie-change sync, profile status, refresh, and logout. That harness pregranted permissions and accelerated its refresh alarm; it did not verify the native permission dialog or real Google model availability.
+
+There is no GitHub Actions workflow in this initial publication because the publishing token lacks `workflow` scope. Run tests locally before deployment. The backend patch must be applied to its documented upstream version. Models exposed by a third-party backend are not a guarantee of account entitlement or response quality.
+
+To regenerate documentation screenshots after building Chrome:
+
+```sh
+python deploy/docs-screenshots.py
+```
+
+The screenshot helper mocks displayed profile metadata; it never imports real sessions or device tokens.
 
 ## Upstream and licensing
 

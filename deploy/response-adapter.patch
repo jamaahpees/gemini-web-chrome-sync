@@ -1,0 +1,473 @@
+diff --git a/internal/app/conversation.go b/internal/app/conversation.go
+index b40ac56..f1da1fa 100644
+--- a/internal/app/conversation.go
++++ b/internal/app/conversation.go
+@@ -458,6 +458,11 @@ func callGeminiConv(messages []map[string]interface{}, mc ModelConfig,
+ 		logf("[conv] 续接命中 turn=%d，只发 %d 字节（历史留服务端）", conv.turn, len(prompt))
+ 	}
+ 
++	var serviceGate *serviceErrorGate
++	if onDelta != nil {
++		serviceGate = newServiceErrorGate(onDelta)
++		onDelta = serviceGate.Push
++	}
+ 	res, err := streamGenerateConv(prompt, mc, conv, onDelta, onReasoning)
+ 	if err != nil {
+ 		if !fresh {
+@@ -467,9 +472,15 @@ func callGeminiConv(messages []map[string]interface{}, mc ModelConfig,
+ 		return "", nil, res, err
+ 	}
+ 	text := extractResponseText(res.Raw)
+-	var toolCalls []ToolCall
+-	if len(tools) > 0 {
+-		text, toolCalls = parseToolCalls(text)
++	text, toolCalls, err := adaptResponse(text, tools, toolChoice)
++	if err != nil {
++		if !fresh {
++			convDelete(parentKey)
++		}
++		return "", nil, res, err
++	}
++	if serviceGate != nil {
++		serviceGate.Flush()
+ 	}
+ 	if text == "" && len(toolCalls) == 0 {
+ 		if !fresh {
+diff --git a/internal/app/server.go b/internal/app/server.go
+index 1866a8d..a10428f 100644
+--- a/internal/app/server.go
++++ b/internal/app/server.go
+@@ -130,7 +130,16 @@ func rejectUnsupported(req map[string]interface{}, messages []map[string]interfa
+ }
+ 
+ func callGemini(prompt, latest string, mc ModelConfig, tools []map[string]interface{},
+-	images []pendingUpload, onDelta, onReasoning func(string)) (string, []ToolCall, *StreamResult, error) {
++	images []pendingUpload, onDelta, onReasoning func(string), toolChoice ...interface{}) (string, []ToolCall, *StreamResult, error) {
++	var choice interface{}
++	if len(toolChoice) > 0 {
++		choice = toolChoice[0]
++	}
++	var serviceGate *serviceErrorGate
++	if onDelta != nil {
++		serviceGate = newServiceErrorGate(onDelta)
++		onDelta = serviceGate.Push
++	}
+ 	res, err := streamGenerateWithFiles(prompt, latest, mc, images, onDelta, onReasoning)
+ 	if err != nil {
+ 		// res 非 nil：失败时它只带归属（哪个号 / 哪个出口），给 recordRequest 用
+@@ -171,9 +180,12 @@ func callGemini(prompt, latest string, mc ModelConfig, tools []map[string]interf
+ 		// 注意不能用 BardErrorInfo 判错 —— 正常响应的结束帧里也带这个码。
+ 		return "", nil, res, fmt.Errorf("upstream returned no content frame (raw %d bytes)", len(res.Raw))
+ 	}
+-	var toolCalls []ToolCall
+-	if len(tools) > 0 {
+-		text, toolCalls = parseToolCalls(text)
++	text, toolCalls, err := adaptResponse(text, tools, choice)
++	if err != nil {
++		return "", nil, res, err
++	}
++	if serviceGate != nil {
++		serviceGate.Flush()
+ 	}
+ 	return text, toolCalls, res, nil
+ }
+@@ -259,6 +271,12 @@ func handleChatCompletions(w http.ResponseWriter, r *http.Request) {
+ 		return
+ 	}
+ 
++	outputMode, err := parseOutputMode(req)
++	if err != nil {
++		writeJSON(w, 400, map[string]interface{}{"error": map[string]string{"message": err.Error(), "type": "invalid_request_error"}})
++		return
++	}
++
+ 	// 图片先解出来带着，真正上传要等挑完账号和出口（见 streamGenerate）。
+ 	images, err := collectImages(messages, "")
+ 	if err != nil {
+@@ -273,6 +291,10 @@ func handleChatCompletions(w http.ResponseWriter, r *http.Request) {
+ 		return
+ 	}
+ 
++	if outputMode != "default" {
++		messages = outputModeMessages(messages, outputMode)
++		prompt, latest = messagesToPrompt(messages, tools, req["tool_choice"])
++	}
+ 	stream, _ := req["stream"].(bool)
+ 	includeUsage := false
+ 	if so, ok := req["stream_options"].(map[string]interface{}); ok {
+@@ -306,7 +328,10 @@ func handleChatCompletions(w http.ResponseWriter, r *http.Request) {
+ 		// 多轮：按历史前缀识别续接，命中就只发新消息、历史留服务端。带 tools 也走这条。
+ 		text, toolCalls, res, err = callGeminiConv(messages, modelCfg, tools, req["tool_choice"], onDelta, onReasoning)
+ 	} else {
+-		text, toolCalls, res, err = callGemini(prompt, latest, modelCfg, tools, images, onDelta, onReasoning)
++		text, toolCalls, res, err = callGemini(prompt, latest, modelCfg, tools, images, onDelta, onReasoning, req["tool_choice"])
++	}
++	if err == nil {
++		err = validateOutputMode(outputMode, text, toolCalls)
+ 	}
+ 	if err != nil {
+ 		recordRequest("chat.completions", modelName, prompt, "", res, 502, err.Error(), stream)
+@@ -661,7 +686,7 @@ func handleResponses(w http.ResponseWriter, r *http.Request) {
+ 	if rtCfg().MultiTurn && len(images) == 0 && modelCfg.Tool == 0 {
+ 		text, toolCalls, res, err = callGeminiConv(messages, modelCfg, tools, req["tool_choice"], onDelta, nil)
+ 	} else {
+-		text, toolCalls, res, err = callGemini(prompt, latest, modelCfg, tools, images, onDelta, nil)
++		text, toolCalls, res, err = callGemini(prompt, latest, modelCfg, tools, images, onDelta, nil, req["tool_choice"])
+ 	}
+ 	if err != nil {
+ 		recordRequest("responses", modelName, prompt, "", res, 502, err.Error(), stream)
+diff --git a/internal/app/response_adapter.go b/internal/app/response_adapter.go
+new file mode 100644
+index 0000000..e0d5535
+--- /dev/null
++++ b/internal/app/response_adapter.go
+@@ -0,0 +1,94 @@
++package app
++
++import (
++	"encoding/json"
++	"fmt"
++	"strings"
++)
++
++var serviceErrorReplies = []string{
++	"I'm having a hard time fulfilling your request. Can I help you with something else instead?",
++	"I seem to be encountering an error. Can I try something else for you?",
++}
++
++func normalizeReply(text string) string { return strings.Join(strings.Fields(text), " ") }
++
++// Only whole, whitespace-normalized known service replies are errors. Quotes,
++// refusals and discussion containing the same words remain ordinary content.
++func adaptResponse(text string, tools []map[string]interface{}, choice interface{}) (string, []ToolCall, error) {
++	for _, reply := range serviceErrorReplies {
++		if normalizeReply(text) == reply {
++			return "", nil, fmt.Errorf("upstream returned a known service-error reply")
++		}
++	}
++	var calls []ToolCall
++	mode, forced := parseToolChoice(choice)
++	if len(tools) > 0 {
++		allowed := map[string]bool{}
++		for _, tool := range tools {
++			fn := tool
++			if getStr(tool, "type") == "function" {
++				if nested, ok := tool["function"].(map[string]interface{}); ok {
++					fn = nested
++				}
++			}
++			if name := getStr(fn, "name"); name != "" {
++				allowed[name] = true
++			}
++		}
++		for _, match := range toolCallRe.FindAllStringSubmatch(text, -1) {
++			var data struct {
++				Name      string          `json:"name"`
++				Arguments json.RawMessage `json:"arguments"`
++			}
++			if err := json.Unmarshal([]byte(strings.TrimSpace(match[1])), &data); err != nil {
++				return "", nil, fmt.Errorf("invalid upstream tool call: malformed JSON")
++			}
++			if !allowed[data.Name] || mode == "none" || (forced != "" && data.Name != forced) {
++				return "", nil, fmt.Errorf("invalid upstream tool call: undeclared or disallowed tool %q", data.Name)
++			}
++			args := strings.TrimSpace(string(data.Arguments))
++			if !json.Valid(data.Arguments) || !strings.HasPrefix(args, "{") {
++				return "", nil, fmt.Errorf("invalid upstream tool call: arguments must be a JSON object")
++			}
++			calls = append(calls, ToolCall{ID: "call_" + randHex(8), Type: "function", Function: ToolCallFunction{Name: data.Name, Arguments: args}})
++		}
++		if strings.Contains(toolCallRe.ReplaceAllString(text, ""), toolFenceOpen) {
++			return "", nil, fmt.Errorf("invalid upstream tool call: unclosed fence")
++		}
++		text = strings.TrimSpace(toolCallRe.ReplaceAllString(text, ""))
++	}
++	if mode == "required" && len(calls) == 0 {
++		return "", nil, fmt.Errorf("upstream did not return the required tool call")
++	}
++	return text, calls, nil
++}
++
++type serviceErrorGate struct {
++	emit     func(string)
++	buf      string
++	released bool
++}
++
++func newServiceErrorGate(emit func(string)) *serviceErrorGate { return &serviceErrorGate{emit: emit} }
++func (g *serviceErrorGate) Push(s string) {
++	if g.released {
++		g.emit(s)
++		return
++	}
++	g.buf += s
++	normalized := normalizeReply(g.buf)
++	for _, reply := range serviceErrorReplies {
++		if strings.HasPrefix(reply, normalized) {
++			return
++		}
++	}
++	g.Flush()
++}
++func (g *serviceErrorGate) Flush() {
++	if g.buf != "" {
++		g.emit(g.buf)
++		g.buf = ""
++	}
++	g.released = true
++}
+diff --git a/internal/app/output_contract.go b/internal/app/output_contract.go
+new file mode 100644
+index 0000000..f4dee6d
+--- /dev/null
++++ b/internal/app/output_contract.go
+@@ -0,0 +1,71 @@
++package app
++
++import (
++	"encoding/json"
++	"fmt"
++	"strings"
++)
++
++func parseOutputMode(req map[string]interface{}) (string, error) {
++	raw, exists := req["gemini_web_options"]
++	if !exists {
++		return "default", nil
++	}
++	opts, ok := raw.(map[string]interface{})
++	if !ok {
++		return "", fmt.Errorf("gemini_web_options must be an object")
++	}
++	mode := "default"
++	if raw, exists := opts["output_mode"]; exists {
++		var ok bool
++		mode, ok = raw.(string)
++		if !ok {
++			return "", fmt.Errorf("output_mode must be a string")
++		}
++	}
++	switch mode {
++	case "default", "code-only", "json":
++	default:
++		return "", fmt.Errorf("unknown output_mode %q", mode)
++	}
++	if stream, _ := req["stream"].(bool); stream && mode != "default" {
++		return "", fmt.Errorf("non-default output_mode currently requires stream=false")
++	}
++	return mode, nil
++}
++
++func validateOutputMode(mode, text string, calls []ToolCall) error {
++	if len(calls) > 0 {
++		return nil
++	}
++	switch mode {
++	case "json":
++		if !json.Valid([]byte(strings.TrimSpace(text))) {
++			return fmt.Errorf("upstream output violates json contract: expected valid unfenced JSON")
++		}
++	case "code-only":
++		if strings.TrimSpace(text) == "" || strings.Contains(text, "```") || strings.Contains(text, "~~~") {
++			return fmt.Errorf("upstream output violates code-only contract: expected nonempty unfenced text")
++		}
++	}
++	return nil
++}
++
++func outputModeMessages(messages []map[string]interface{}, mode string) []map[string]interface{} {
++	instruction := ""
++	switch mode {
++	case "json":
++		instruction = "For the final answer, return only valid JSON, without Markdown fences or surrounding prose. Tool calls, when needed, still use the tool_call protocol."
++	case "code-only":
++		instruction = "For the final answer, act as a code-only assistant: return nonempty code without Markdown fences or explanatory prose. Tool calls, when needed, still use the tool_call protocol."
++	default:
++		return messages
++	}
++	for _, message := range messages {
++		if getStr(message, "role") == "system" && getStr(message, "content") == instruction {
++			return messages
++		}
++	}
++	out := append([]map[string]interface{}{}, messages...)
++	return append(out, map[string]interface{}{"role": "system", "content": instruction})
++}
+diff --git a/internal/app/response_adapter_test.go b/internal/app/response_adapter_test.go
+new file mode 100644
+index 0000000..a7a42f1
+--- /dev/null
++++ b/internal/app/response_adapter_test.go
+@@ -0,0 +1,133 @@
++package app
++
++import (
++	"strings"
++	"testing"
++)
++
++var adapterTools = []map[string]interface{}{{"type": "function", "function": map[string]interface{}{"name": "lookup"}}}
++
++func TestAdaptResponseServiceErrors(t *testing.T) {
++	for _, reply := range []string{
++		"I'm having a hard time fulfilling your request. Can I help you with something else instead?",
++		"I seem to be encountering an error. Can I try something else for you?",
++	} {
++		for _, text := range []string{reply, " \n" + strings.ReplaceAll(reply, " ", "  \t") + "\n"} {
++			if _, _, err := adaptResponse(text, nil, nil); err == nil {
++				t.Errorf("service error accepted: %q", text)
++			}
++		}
++		for _, text := range []string{"\"" + reply + "\"", "The service said: " + reply, reply + " Here is why.", "I cannot help with that request."} {
++			if got, _, err := adaptResponse(text, nil, nil); err != nil || got != text {
++				t.Errorf("ordinary reply changed: %q, %v", got, err)
++			}
++		}
++	}
++}
++
++func TestAdaptResponseToolValidation(t *testing.T) {
++	for _, block := range []string{
++		`{"name":"unknown","arguments":{}}`,
++		`{"name":"","arguments":{}}`,
++		`{"name":"lookup","arguments":null}`,
++		`{"name":"lookup"}`,
++		`{"name":"lookup","arguments":[]}`,
++		`{"name":"lookup","arguments":"{}"}`,
++		`{"name":"lookup","arguments":`,
++	} {
++		if _, calls, err := adaptResponse("```tool_call\n"+block+"\n```", adapterTools, nil); err == nil || len(calls) > 0 {
++			t.Errorf("invalid call accepted: %s (%v)", block, err)
++		}
++	}
++	for _, choice := range []interface{}{"required", map[string]interface{}{"type": "function", "function": map[string]interface{}{"name": "lookup"}}} {
++		if _, _, err := adaptResponse("Hello, the tool is not available in my current environment.", adapterTools, choice); err == nil {
++			t.Errorf("missing required call accepted: %v", choice)
++		}
++	}
++	if _, _, err := adaptResponse("Hello", adapterTools, "auto"); err != nil {
++		t.Fatal(err)
++	}
++	text, calls, err := adaptResponse("```tool_call\n"+`{"name":"lookup","arguments":{"id":1234567890123456789}}`+"\n```", adapterTools, "required")
++	if err != nil || text != "" || len(calls) != 1 || !strings.Contains(calls[0].Function.Arguments, "1234567890123456789") {
++		t.Fatalf("valid call rejected/changed: %q %+v %v", text, calls, err)
++	}
++}
++
++func TestOutputContracts(t *testing.T) {
++	for _, req := range []map[string]interface{}{
++		{"gemini_web_options": "json"},
++		{"gemini_web_options": map[string]interface{}{"output_mode": "yaml"}},
++		{"gemini_web_options": map[string]interface{}{"output_mode": 42}},
++		{"stream": true, "gemini_web_options": map[string]interface{}{"output_mode": "json"}},
++		{"stream": true, "gemini_web_options": map[string]interface{}{"output_mode": "code-only"}},
++	} {
++		if _, err := parseOutputMode(req); err == nil {
++			t.Errorf("invalid options accepted: %v", req)
++		}
++	}
++	for _, tc := range []struct {
++		mode, text string
++		valid      bool
++	}{
++		{"default", "", true}, {"default", "```go\nx\n```", true},
++		{"json", `{"ok":true}`, true}, {"json", `[1,2]`, true},
++		{"json", "```json\n{}\n```", false}, {"json", `{} trailing`, false},
++		{"code-only", "fmt.Println(1)", true}, {"code-only", " \n", false},
++		{"code-only", "```go\nfmt.Println(1)\n```", false},
++	} {
++		if err := validateOutputMode(tc.mode, tc.text, nil); (err == nil) != tc.valid {
++			t.Errorf("%s %q: %v", tc.mode, tc.text, err)
++		}
++		if err := validateOutputMode(tc.mode, tc.text, []ToolCall{{}}); err != nil {
++			t.Errorf("tool calls should take precedence: %v", err)
++		}
++	}
++	original := []map[string]interface{}{{"role": "system", "content": "Client instructions"}, {"role": "user", "content": "Write code"}}
++	if got := outputModeMessages(original, "default"); len(got) != 2 {
++		t.Fatal("default injected instructions")
++	}
++	got := outputModeMessages(original, "code-only")
++	if len(got) != 3 || getStr(got[0], "content") != "Client instructions" || len(original) != 2 {
++		t.Fatalf("client instructions changed: %v", got)
++	}
++	if twice := outputModeMessages(got, "code-only"); len(twice) != 3 {
++		t.Fatal("persona injected twice")
++	}
++}
++
++func TestAdaptResponseDisallowedAndUnclosedCalls(t *testing.T) {
++	full := "```tool_call\n" + `{"name":"lookup","arguments":{}}` + "\n```"
++	for _, choice := range []interface{}{"none", map[string]interface{}{"type": "function", "function": map[string]interface{}{"name": "other"}}} {
++		if _, calls, err := adaptResponse(full, adapterTools, choice); err == nil || len(calls) != 0 {
++			t.Fatalf("disallowed call accepted: %v", choice)
++		}
++	}
++	if _, calls, err := adaptResponse(strings.TrimSuffix(full, "```"), adapterTools, nil); err == nil || len(calls) != 0 {
++		t.Fatal("unclosed call accepted")
++	}
++}
++
++func TestServiceErrorGate(t *testing.T) {
++	reply := "I'm having a hard time fulfilling your request. Can I help you with something else instead?"
++	for _, full := range []string{reply, " \n" + reply + "\n", "I seem to be encountering an error. Can I try something else for you?"} {
++		var sent strings.Builder
++		g := newServiceErrorGate(func(s string) { sent.WriteString(s) })
++		for _, chunk := range chars(full) {
++			g.Push(chunk)
++		}
++		if sent.Len() != 0 {
++			t.Fatalf("service error leaked: %q", sent.String())
++		}
++	}
++	for _, full := range []string{"Hello", "\"" + reply + "\"", reply + " More discussion."} {
++		var sent strings.Builder
++		g := newServiceErrorGate(func(s string) { sent.WriteString(s) })
++		for _, chunk := range chars(full) {
++			g.Push(chunk)
++		}
++		g.Flush()
++		if sent.String() != full {
++			t.Fatalf("ordinary output changed: %q", sent.String())
++		}
++	}
++}
+diff --git a/docs/response-adapter.md b/docs/response-adapter.md
+new file mode 100644
+index 0000000..4d02c92
+--- /dev/null
++++ b/docs/response-adapter.md
+@@ -0,0 +1,33 @@
++# Response adaptation
++
++Both Chat Completions and Responses reject these exact whole upstream replies after collapsing whitespace (case and punctuation remain significant):
++
++- `I'm having a hard time fulfilling your request. Can I help you with something else instead?`
++- `I seem to be encountering an error. Can I try something else for you?`
++
++This is not a refusal filter. Quotes, explanatory prefixes/suffixes and ordinary refusals pass unchanged. Streaming holds only the initial candidate prefix until it differs from either reply; a matching whole reply is never sent as assistant content. Upstream failures use the existing HTTP 502 or streaming failure path, never a successful terminal event. No retry is performed.
++
++Tool adaptation accepts only declared names and valid JSON-object arguments. Invalid, unclosed or disallowed tool calls fail explicitly, without returning executable calls. `required` and forced-name `tool_choice` fail when no valid call is returned. Optional `auto` allows a normal text answer. Argument JSON is preserved rather than decoded through floating point. This validates the envelope, not the tool's parameter schema or execution safety. No tool is executed by the adapter.
++
++## Opt-in Chat Completions contracts
++
++Use the custom per-request key:
++
++```json
++{
++  "model": "gemini-flash",
++  "messages": [{"role": "user", "content": "Return a JSON object with ok=true"}],
++  "stream": false,
++  "gemini_web_options": {"output_mode": "json"}
++}
++```
++
++Modes:
++
++- `default` (also when absent): no added instruction or final-output contract; ordinary streaming remains incremental.
++- `json`: adds one final-answer instruction without replacing client system messages; the trimmed final text must satisfy Go's `json.Valid`. Markdown fences are rejected, never stripped. JSON scalars and arrays are valid too.
++- `code-only`: adds one code-only final-answer instruction without replacing client system messages; final text must be nonempty and contain neither backtick nor tilde Markdown fences. This is a formatting check, **not semantic code validation**; prose or invalid code without fences cannot reliably be detected.
++
++Valid tool calls take precedence over the final-answer contract. Final output violating the contract returns HTTP 502. Unknown/non-string modes or a non-object options value return HTTP 400. Non-default modes currently require `stream=false`; streaming requests are explicitly rejected with HTTP 400 before generation, rather than exposing unvalidated output. These options apply only to Chat Completions, not Responses. No global persona, model change, automatic retry or orchestrator change is introduced.
++
++Offline unit tests validate adaptation and formatting only. They do not establish upstream tool reliability or successful tool execution.
