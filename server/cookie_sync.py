@@ -135,19 +135,17 @@ class Backend:
             if any(str(r['id']) == str(candidate['id']) for r in old):
                 candidate = None
                 raise Failure(503, 'backend_partial_failure')
-            self.status(candidate, 'disabled')
+            # Candidate check: temporary enable candidate for check if needed, but in our backend
+            # checking works with the cookie regardless of status.
             if not self.check(candidate):
                 self.delete(candidate)
                 candidate = None
                 return 'invalid'
-            for row in old:
-                if row.get('status') != 'disabled':
-                    disabled.append(row)
-                    self.status(row, 'disabled')
             self.status(candidate, 'enabled')
             committed = True
             for row in old:
-                self.delete(row)
+                if str(row['id']) != str(candidate['id']):
+                    self.delete(row)
             return 'applied'
         except Failure as error:
             if committed:
