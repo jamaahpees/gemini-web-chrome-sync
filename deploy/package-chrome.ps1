@@ -12,12 +12,8 @@ if (Test-Path $envFile) {
 }
 Copy-Item (Join-Path $root 'manifest.chrome.json') (Join-Path $target 'manifest.json') -Force
 # Keep private device credentials outside source; package only for this local installation.
-$privateProfiles = @('main-profile.connection.json', 'profile-2.connection.json')
-foreach ($profile in $privateProfiles) {
-    $src = Join-Path $HOME ".gemini-cookie-sync\$profile"
-    if (Test-Path $src) {
-        Copy-Item $src (Join-Path $target "sync\$profile") -Force
-    }
+Get-ChildItem (Join-Path $HOME ".gemini-cookie-sync\*.connection.json") | ForEach-Object {
+    Copy-Item $_.FullName (Join-Path $target "sync\$($_.Name)") -Force
 }
 New-Item -ItemType Directory -Force (Join-Path $root 'dist') | Out-Null
 $zip = Join-Path $root 'dist/cookie-editor-gemini-sync-chrome.zip'

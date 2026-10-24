@@ -212,15 +212,10 @@ async function connectPresetProfile(filename, btnId) {
   }
 }
 
-element('connect-profile-1')?.addEventListener('click', () => {
-  void connectPresetProfile(
-    'main-profile.connection.json',
-    'connect-profile-1'
-  );
-});
-
-element('connect-profile-2')?.addEventListener('click', () => {
-  void connectPresetProfile('profile-2.connection.json', 'connect-profile-2');
+element('connect-selected-profile')?.addEventListener('click', () => {
+  const selected =
+    element('select-profile')?.value || 'main-profile.connection.json';
+  void connectPresetProfile(selected, 'connect-selected-profile');
 });
 
 let pendingConnection;

@@ -68,38 +68,31 @@
           🚀 Pilih Jalur Profil untuk Chrome Ini
         </h2>
         <p style="margin: 4px 0 12px 0; font-size: 0.9em; color: #334155">
-          Tiap profil Chrome <b>harus memilih satu jalur yang berbeda</b> agar
-          akun Google Anda tidak saling menimpa. Klik salah satu tombol di bawah
-          untuk langsung mengaktifkannya:
+          Tiap profil Chrome <b>harus memilih satu jalur profil</b> agar akun Google Anda tidak saling menimpa. Pilih jalur profil untuk browser ini:
         </p>
-        <div style="display: flex; gap: 10px; flex-wrap: wrap">
+        <div style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap">
+          <label for="select-profile" style="font-weight: bold; font-size: 0.9em;">Jalur Profil:</label>
+          <select id="select-profile" style="padding: 8px 12px; border-radius: 6px; border: 1px solid #cbd5e1; font-size: 0.9em; min-width: 220px;">
+            <option value="main-profile.connection.json">Profil 1 (Utama)</option>
+            <option value="profile-2.connection.json">Profil 2 (Akun ke-2)</option>
+            <option value="profile-3.connection.json">Profil 3 (Akun ke-3)</option>
+            <option value="profile-4.connection.json">Profil 4 (Akun ke-4)</option>
+            <option value="profile-5.connection.json">Profil 5 (Akun ke-5)</option>
+            <option value="profile-6.connection.json">Profil 6 (Akun ke-6)</option>
+          </select>
           <button
-            id="connect-profile-1"
+            id="connect-selected-profile"
             type="button"
             style="
               background: #0284c7;
               color: white;
               border: none;
-              padding: 10px 16px;
+              padding: 9px 18px;
               border-radius: 6px;
               font-weight: bold;
               cursor: pointer;
             ">
-            ⚡ Sambungkan ke Profil 1 (Utama)
-          </button>
-          <button
-            id="connect-profile-2"
-            type="button"
-            style="
-              background: #0d9488;
-              color: white;
-              border: none;
-              padding: 10px 16px;
-              border-radius: 6px;
-              font-weight: bold;
-              cursor: pointer;
-            ">
-            ⚡ Sambungkan ke Profil 2 (Akun ke-2)
+            ⚡ Sambungkan Profil Ini
           </button>
         </div>
       </section>
