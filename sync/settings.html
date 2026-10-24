@@ -59,32 +59,49 @@
         id="one-click-section"
         style="
           background: #e0f2fe;
-          padding: 12px;
+          padding: 14px;
           border-radius: 8px;
           border: 1px solid #7dd3fc;
           margin: 16px 0;
         ">
         <h2 style="margin-top: 0; color: #0369a1">
-          🚀 1-Click Connect (Default Server)
+          🚀 Pilih Jalur Profil untuk Chrome Ini
         </h2>
-        <p style="margin: 4px 0 10px 0">
-          Connect this Chrome profile directly to your VPS server with
-          pre-configured settings.
+        <p style="margin: 4px 0 12px 0; font-size: 0.9em; color: #334155">
+          Tiap profil Chrome <b>harus memilih satu jalur yang berbeda</b> agar
+          akun Google Anda tidak saling menimpa. Klik salah satu tombol di bawah
+          untuk langsung mengaktifkannya:
         </p>
-        <button
-          id="one-click-connect"
-          type="button"
-          style="
-            background: #0284c7;
-            color: white;
-            border: none;
-            padding: 10px 18px;
-            border-radius: 6px;
-            font-weight: bold;
-            cursor: pointer;
-          ">
-          ⚡ Aktifkan Sinkronisasi Sekarang
-        </button>
+        <div style="display: flex; gap: 10px; flex-wrap: wrap">
+          <button
+            id="connect-profile-1"
+            type="button"
+            style="
+              background: #0284c7;
+              color: white;
+              border: none;
+              padding: 10px 16px;
+              border-radius: 6px;
+              font-weight: bold;
+              cursor: pointer;
+            ">
+            ⚡ Sambungkan ke Profil 1 (Utama)
+          </button>
+          <button
+            id="connect-profile-2"
+            type="button"
+            style="
+              background: #0d9488;
+              color: white;
+              border: none;
+              padding: 10px 16px;
+              border-radius: 6px;
+              font-weight: bold;
+              cursor: pointer;
+            ">
+            ⚡ Sambungkan ke Profil 2 (Akun ke-2)
+          </button>
+        </div>
       </section>
       <details style="margin-top: 14px">
         <summary style="cursor: pointer; color: #666; font-size: 0.9em">

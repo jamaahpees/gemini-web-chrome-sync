@@ -11,10 +11,13 @@ if (Test-Path $envFile) {
     (Get-Content $envFile -Raw) -replace '@@browser_name', 'chrome' | Set-Content $envFile -NoNewline
 }
 Copy-Item (Join-Path $root 'manifest.chrome.json') (Join-Path $target 'manifest.json') -Force
-# Keep private device credentials outside source; package only for this installation.
-$privateConnection = Join-Path $HOME '.gemini-cookie-sync/main-profile.connection.json'
-if (Test-Path $privateConnection) {
-    Copy-Item $privateConnection (Join-Path $target 'sync/default-connection.json') -Force
+# Keep private device credentials outside source; package only for this local installation.
+$privateProfiles = @('main-profile.connection.json', 'profile-2.connection.json')
+foreach ($profile in $privateProfiles) {
+    $src = Join-Path $HOME ".gemini-cookie-sync\$profile"
+    if (Test-Path $src) {
+        Copy-Item $src (Join-Path $target "sync\$profile") -Force
+    }
 }
 New-Item -ItemType Directory -Force (Join-Path $root 'dist') | Out-Null
 $zip = Join-Path $root 'dist/cookie-editor-gemini-sync-chrome.zip'

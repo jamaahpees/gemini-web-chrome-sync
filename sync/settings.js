@@ -184,48 +184,43 @@ function failed(error) {
   element('status').textContent = error.message;
 }
 
-let defaultProfile;
-const defaultConnection = fetch(
-  chrome.runtime.getURL('sync/default-connection.json')
-)
-  .then(response => (response.ok ? response.json() : null))
-  .then(connection => {
-    if (connection) endpointOrigin(connection.endpoint);
-    defaultProfile = connection;
-    return connection;
-  })
-  .catch(() => null);
-
-// Request permissions directly in the click gesture, before awaiting file I/O.
-element('one-click-connect')?.addEventListener('click', async () => {
+async function connectPresetProfile(filename, btnId) {
+  const btn = element(btnId);
+  if (!btn) return;
+  const originalText = btn.textContent;
   try {
-    element('one-click-connect').disabled = true;
-    element('one-click-connect').textContent = 'Connecting...';
-    if (!defaultProfile)
-      throw new Error(
-        'Load a private connection configuration or use manual pairing.'
-      );
+    btn.disabled = true;
+    btn.textContent = 'Connecting...';
+    const res = await fetch(chrome.runtime.getURL(`sync/${filename}`));
+    if (!res.ok)
+      throw new Error(`File ${filename} tidak ditemukan di paket ekstensi.`);
+    const connection = await res.json();
+    const endpoint = endpointOrigin(connection.endpoint);
     const granted = await chrome.permissions.request({
       origins: [
-        permissionPattern(defaultProfile.endpoint),
+        permissionPattern(endpoint),
         'https://gemini.google.com/*',
         'https://google.com/*',
       ],
     });
-    if (!granted) throw new Error('Permissions were not granted by user.');
-    const connection = await defaultConnection;
-    if (!connection)
-      throw new Error(
-        'Private connection configuration is unavailable. Reload the current extension package.'
-      );
-    endpointOrigin(connection.endpoint);
+    if (!granted) throw new Error('Izin tidak diberikan oleh pengguna.');
     await finish({ action: 'importConnection', connection });
   } catch (error) {
-    element('one-click-connect').disabled = false;
-    element('one-click-connect').textContent =
-      '⚡ Aktifkan Sinkronisasi Sekarang';
-    failed(new Error(error?.message || '1-Click connection failed.'));
+    btn.disabled = false;
+    btn.textContent = originalText;
+    failed(new Error(error?.message || 'Gagal menyambungkan profil.'));
   }
+}
+
+element('connect-profile-1')?.addEventListener('click', () => {
+  void connectPresetProfile(
+    'main-profile.connection.json',
+    'connect-profile-1'
+  );
+});
+
+element('connect-profile-2')?.addEventListener('click', () => {
+  void connectPresetProfile('profile-2.connection.json', 'connect-profile-2');
 });
 
 let pendingConnection;
